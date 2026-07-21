@@ -4,16 +4,21 @@
     </a>
 </p>
 
-<h1 align="center">Cheat Engine</h1>
+<h1 align="center">Cheat Engine Windows Binary Release</h1>
+
+This is a fork of the original [Cheat Engine](https://github.com/cheat-engine/cheat-engine). It provides reproducible Windows binaries built from the publicly available source code using GitHub Actions and offers them as direct downloads. The reason to make this is because Cheat Engine has ceased to release source code for their latest versions (e.g. v7.6, 7.7) and the Windows binaries are now locked behind a shady installer that shows sponsored results or a paid patreon subscription.
+
+As a user I am not happy with this transition, yet I respect the developer’s decision and the need to fund continued development.
+
+This fork is not affiliated with or endorsed by the original Cheat Engine project. The original README follows below.
 
 Cheat Engine is a development environment focused on modding games and applications for personal use.
 
 
 # Download
 
-  * **[Latest Version](https://github.com/cheat-engine/cheat-engine/releases/latest)**
+  * **[Latest Version](https://github.com/cyberenchanter/cheat-engine/releases/latest)**
 
-[Older versions](https://github.com/cheat-engine/cheat-engine/releases)
 
 
 # Links

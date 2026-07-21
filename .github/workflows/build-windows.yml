@@ -1,0 +1,186 @@
+name: Build Windows binaries
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Windows Release
+    runs-on: windows-2022
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Restore Lazarus toolchain
+        id: lazarus-cache
+        uses: actions/cache@v5
+        with:
+          path: C:\lazarus
+          key: lazarus-2.2.2-fpc-3.2.2-win64-cross-i386-v1
+
+      - name: Install Lazarus and the Win32 cross-compiler
+        if: steps.lazarus-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $downloadRoot = 'https://download.lazarus-ide.org/Lazarus%20Windows%2064%20bits/Lazarus%202.2.2'
+          $installers = @(
+            'lazarus-2.2.2-fpc-3.2.2-win64.exe',
+            'lazarus-2.2.2-fpc-3.2.2-cross-i386-win32-win64.exe'
+          )
+
+          foreach ($installerName in $installers) {
+            $installerPath = Join-Path $env:RUNNER_TEMP $installerName
+            & curl.exe --fail --location --retry 5 --output $installerPath "$downloadRoot/$installerName"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to download $installerName"
+            }
+
+            $process = Start-Process -FilePath $installerPath -ArgumentList @(
+              '/VERYSILENT',
+              '/SUPPRESSMSGBOXES',
+              '/NORESTART',
+              '/DIR=C:\lazarus'
+            ) -Wait -PassThru
+            if ($process.ExitCode -ne 0) {
+              throw "$installerName exited with code $($process.ExitCode)"
+            }
+          }
+
+      - name: Verify toolchain
+        shell: pwsh
+        run: |
+          $lazBuild = 'C:\lazarus\lazbuild.exe'
+          if (-not (Test-Path $lazBuild)) {
+            throw "lazbuild was not found at $lazBuild"
+          }
+          & $lazBuild --version
+          if ($LASTEXITCODE -ne 0) {
+            throw "lazbuild --version failed with code $LASTEXITCODE"
+          }
+
+      - name: Build Cheat Engine and Lazarus support projects
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $lazBuild = 'C:\lazarus\lazbuild.exe'
+
+          function Invoke-LazBuild {
+            param(
+              [Parameter(Mandatory)] [string] $Project,
+              [Parameter(Mandatory)] [string] $Mode
+            )
+
+            Write-Host "::group::$Project ($Mode)"
+            & $lazBuild --build-all "--build-mode=$Mode" $Project
+            $exitCode = $LASTEXITCODE
+            Write-Host '::endgroup::'
+
+            if ($exitCode -ne 0) {
+              throw "lazbuild failed for '$Project' in mode '$Mode' with code $exitCode"
+            }
+          }
+
+          $builds = @(
+            @{ Project = 'Cheat Engine\cheatengine.lpi'; Mode = 'Release 32-Bit' },
+            @{ Project = 'Cheat Engine\cheatengine.lpi'; Mode = 'Release 64-Bit' },
+            @{ Project = 'Cheat Engine\cheatengine.lpi'; Mode = 'Release 64-Bit O4 AVX2' },
+            @{ Project = 'Cheat Engine\launcher\cheatengine.lpi'; Mode = 'release' },
+            @{ Project = 'Cheat Engine\speedhack\speedhack.lpi'; Mode = '32-bit' },
+            @{ Project = 'Cheat Engine\speedhack\speedhack.lpi'; Mode = '64-bit' },
+            @{ Project = 'Cheat Engine\luaclient\luaclient.lpi'; Mode = 'Release 32' },
+            @{ Project = 'Cheat Engine\luaclient\luaclient.lpi'; Mode = 'Release 64' },
+            @{ Project = 'Cheat Engine\VEHDebug\vehdebug.lpi'; Mode = 'release 32' },
+            @{ Project = 'Cheat Engine\VEHDebug\vehdebug.lpi'; Mode = 'release 64' }
+          )
+
+          foreach ($build in $builds) {
+            Invoke-LazBuild -Project $build.Project -Mode $build.Mode
+          }
+
+      - name: Check expected outputs
+        shell: pwsh
+        run: |
+          $expectedOutputs = @(
+            'Cheat Engine\bin\Cheat Engine.exe',
+            'Cheat Engine\bin\cheatengine-i386.exe',
+            'Cheat Engine\bin\cheatengine-x86_64.exe',
+            'Cheat Engine\bin\cheatengine-x86_64-SSE4-AVX2.exe',
+            'Cheat Engine\bin\speedhack-i386.dll',
+            'Cheat Engine\bin\speedhack-x86_64.dll',
+            'Cheat Engine\bin\luaclient-i386.dll',
+            'Cheat Engine\bin\luaclient-x86_64.dll',
+            'Cheat Engine\bin\vehdebug-i386.dll',
+            'Cheat Engine\bin\vehdebug-x86_64.dll'
+          )
+
+          $missingOutputs = $expectedOutputs | Where-Object { -not (Test-Path $_) }
+          if ($missingOutputs) {
+            throw "Expected build outputs are missing:`n$($missingOutputs -join "`n")"
+          }
+
+          Get-Item $expectedOutputs | Select-Object Name, Length
+
+      - name: Package Windows build
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path 'Cheat Engine\bin\*' `
+            -DestinationPath 'Cheat-Engine-Windows.zip' `
+            -Force
+
+      - name: Upload Windows build
+        uses: actions/upload-artifact@v7
+        with:
+          name: cheat-engine-windows-${{ github.sha }}
+          path: Cheat-Engine-Windows.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub release
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Windows build
+        uses: actions/download-artifact@v7
+        with:
+          name: cheat-engine-windows-${{ github.sha }}
+          path: release
+
+      - name: Create dated release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          build_date="$(date -u +%Y%m%d)"
+          short_sha="${GITHUB_SHA:0:7}"
+          version="${build_date}-${short_sha}"
+
+          if gh release view "$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $version already exists"
+            exit 0
+          fi
+
+          gh release create "$version" \
+            "release/Cheat-Engine-Windows.zip#Cheat Engine for Windows" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "$version" \
+            --generate-notes
